@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: flask-devops-live
+    runtime: docker
+    plan: free
+    autoDeployTrigger: off
+    healthCheckPath: /health
+    envVars:
+      - key: APP_VERSION
+        value: 1.0.0

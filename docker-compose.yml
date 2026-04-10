@@ -1,0 +1,16 @@
+version: "3.9"
+
+services:
+  flask-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        BUILD_REF: local-compose
+        DEPLOYED_AT: local-compose
+    container_name: flask-devops-app
+    ports:
+      - "5000:5000"
+    environment:
+      APP_VERSION: 1.0.0-local
+      PORT: 5000
