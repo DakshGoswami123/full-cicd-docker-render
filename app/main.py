@@ -12,9 +12,10 @@ def create_app() -> Flask:
     def home():
         version = os.getenv("APP_VERSION", "1.0.0")
         project_title = "Full CI/CD Pipeline with Docker and Live Cloud Deployment"
-        build_ref = os.getenv("BUILD_REF", "local-demo")
-        deployed_at = os.getenv(
-            "DEPLOYED_AT", datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        build_ref = (os.getenv("BUILD_REF") or os.getenv("RENDER_GIT_COMMIT") or "local-demo")[:12]
+        deployed_at = os.getenv("DEPLOYED_AT") or (
+            "render-runtime" if os.getenv("RENDER") == "true"
+            else datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
         )
         html = """
         <!DOCTYPE html>
@@ -375,8 +376,11 @@ def create_app() -> Flask:
                     "project": "Full CI/CD Pipeline with Docker and Live Cloud Deployment",
                     "status": "running",
                     "version": os.getenv("APP_VERSION", "1.0.0"),
-                    "build_ref": os.getenv("BUILD_REF", "local-demo"),
-                    "deployed_at": os.getenv("DEPLOYED_AT", "not-set"),
+                    "build_ref": (
+                        os.getenv("BUILD_REF") or os.getenv("RENDER_GIT_COMMIT") or "local-demo"
+                    )[:12],
+                    "deployed_at": os.getenv("DEPLOYED_AT")
+                    or ("render-runtime" if os.getenv("RENDER") == "true" else "not-set"),
                 }
             ),
             200,
