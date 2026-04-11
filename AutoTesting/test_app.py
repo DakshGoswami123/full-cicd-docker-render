@@ -15,7 +15,7 @@ def test_health_endpoint_returns_200():
     app = create_app()
     client = app.test_client()
 
-    response = client.get("/health")
+    response = client.get("/health?raw=1")
 
     assert response.status_code == 200
     assert response.get_json()["status"] == "healthy"
@@ -25,7 +25,7 @@ def test_info_endpoint_returns_metadata():
     app = create_app()
     client = app.test_client()
 
-    response = client.get("/api/info")
+    response = client.get("/api/info?raw=1")
     payload = response.get_json()
 
     assert response.status_code == 200

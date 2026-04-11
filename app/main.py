@@ -1,12 +1,89 @@
 import os
 from datetime import datetime, timezone
 
-from flask import Flask, jsonify, render_template_string
+from flask import Flask, jsonify, render_template_string, request
 
 
 def create_app() -> Flask:
     """Create and configure the Flask application."""
     app = Flask(__name__)
+
+    def wants_raw_json() -> bool:
+        """Return JSON for tests, scripts, and explicit raw requests."""
+        return request.args.get("raw") == "1" or request.accept_mimetypes.best == "application/json"
+
+    def render_status_page(title: str, payload: dict) -> str:
+        """Render a small browser-friendly status page for demo endpoints."""
+        pretty_payload = "{\n" + ",\n".join(
+            f'  "{key}": "{value}"' for key, value in payload.items()
+        ) + "\n}"
+        html = """
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>{{ title }}</title>
+            <style>
+                body {
+                    margin: 0;
+                    font-family: "Segoe UI", Arial, sans-serif;
+                    background: linear-gradient(180deg, #eef4f9, #dce8f4);
+                    color: #17324a;
+                    min-height: 100vh;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    padding: 24px;
+                }
+                .card {
+                    width: min(760px, 100%);
+                    background: white;
+                    border-radius: 22px;
+                    padding: 28px;
+                    box-shadow: 0 18px 45px rgba(17, 50, 77, 0.12);
+                    border: 1px solid rgba(17, 50, 77, 0.12);
+                }
+                h1 {
+                    margin: 0 0 8px;
+                    color: #11324d;
+                }
+                p {
+                    color: #587188;
+                    line-height: 1.6;
+                }
+                pre {
+                    margin-top: 18px;
+                    padding: 18px;
+                    border-radius: 16px;
+                    background: #0f2235;
+                    color: #dff4ff;
+                    overflow-x: auto;
+                    font-size: 0.98rem;
+                }
+                .hint {
+                    margin-top: 14px;
+                    font-size: 0.95rem;
+                    color: #587188;
+                }
+                code {
+                    background: #edf4fb;
+                    padding: 2px 6px;
+                    border-radius: 6px;
+                }
+            </style>
+        </head>
+        <body>
+            <div class="card">
+                <h1>{{ title }}</h1>
+                <p>This endpoint is working correctly. For browser demos it is shown in a readable format.</p>
+                <pre>{{ pretty_payload }}</pre>
+                <div class="hint">Use <code>?raw=1</code> if you want machine-readable JSON.</div>
+            </div>
+        </body>
+        </html>
+        """
+        return render_template_string(html, title=title, pretty_payload=pretty_payload)
 
     @app.get("/")
     def home():
@@ -365,26 +442,27 @@ def create_app() -> Flask:
     @app.get("/health")
     def health():
         """Health-check endpoint used by tests and Render."""
-        return jsonify({"status": "healthy"}), 200
+        payload = {"status": "healthy"}
+        if wants_raw_json():
+            return jsonify(payload), 200
+        return render_status_page("Health Endpoint", payload), 200
 
     @app.get("/api/info")
     def info():
         """Project metadata endpoint useful for demos and operational checks."""
-        return (
-            jsonify(
-                {
-                    "project": "Full CI/CD Pipeline with Docker and Live Cloud Deployment",
-                    "status": "running",
-                    "version": os.getenv("APP_VERSION", "1.0.0"),
-                    "build_ref": (
-                        os.getenv("BUILD_REF") or os.getenv("RENDER_GIT_COMMIT") or "local-demo"
-                    )[:12],
-                    "deployed_at": os.getenv("DEPLOYED_AT")
-                    or ("render-runtime" if os.getenv("RENDER") == "true" else "not-set"),
-                }
-            ),
-            200,
-        )
+        payload = {
+            "project": "Full CI/CD Pipeline with Docker and Live Cloud Deployment",
+            "status": "running",
+            "version": os.getenv("APP_VERSION", "1.0.0"),
+            "build_ref": (os.getenv("BUILD_REF") or os.getenv("RENDER_GIT_COMMIT") or "local-demo")[
+                :12
+            ],
+            "deployed_at": os.getenv("DEPLOYED_AT")
+            or ("render-runtime" if os.getenv("RENDER") == "true" else "not-set"),
+        }
+        if wants_raw_json():
+            return jsonify(payload), 200
+        return render_status_page("Application Metadata", payload), 200
 
     return app
 
