@@ -1,7 +1,34 @@
+import io
 import os
 from datetime import datetime, timezone
 
+from PyPDF2 import PdfReader
 from flask import Flask, jsonify, render_template_string, request
+
+
+SKILL_KEYWORDS = [
+    "python",
+    "java",
+    "sql",
+    "flask",
+    "django",
+    "docker",
+    "git",
+    "github actions",
+    "aws",
+    "azure",
+    "gcp",
+    "kubernetes",
+    "linux",
+    "html",
+    "css",
+    "javascript",
+    "react",
+    "machine learning",
+    "data analysis",
+]
+
+ALLOWED_EXTENSIONS = {".pdf", ".txt"}
 
 
 def create_app() -> Flask:
@@ -12,8 +39,18 @@ def create_app() -> Flask:
         """Return JSON for tests, scripts, and explicit raw requests."""
         return request.args.get("raw") == "1" or request.accept_mimetypes.best == "application/json"
 
+    def deployment_metadata() -> dict:
+        """Return deployment information shown in the UI and info endpoint."""
+        return {
+            "project": "AI Resume Analyzer with Automated CI/CD Pipeline",
+            "version": os.getenv("APP_VERSION", "1.0.0"),
+            "build_ref": (os.getenv("BUILD_REF") or os.getenv("RENDER_GIT_COMMIT") or "local-demo")[:12],
+            "deployed_at": os.getenv("DEPLOYED_AT")
+            or ("render-runtime" if os.getenv("RENDER") == "true" else datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")),
+        }
+
     def render_status_page(title: str, payload: dict) -> str:
-        """Render a small browser-friendly status page for demo endpoints."""
+        """Render a browser-friendly status page for demo endpoints."""
         pretty_payload = "{\n" + ",\n".join(
             f'  "{key}": "{value}"' for key, value in payload.items()
         ) + "\n}"
@@ -85,173 +122,206 @@ def create_app() -> Flask:
         """
         return render_template_string(html, title=title, pretty_payload=pretty_payload)
 
-    @app.get("/")
-    def home():
-        version = os.getenv("APP_VERSION", "1.0.0")
-        project_title = "Full CI/CD Pipeline with Docker and Live Cloud Deployment"
-        build_ref = (os.getenv("BUILD_REF") or os.getenv("RENDER_GIT_COMMIT") or "local-demo")[:12]
-        deployed_at = os.getenv("DEPLOYED_AT") or (
-            "render-runtime" if os.getenv("RENDER") == "true"
-            else datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-        )
+    def extract_resume_text(uploaded_file) -> tuple[str, str]:
+        """Extract text from a PDF or plain text resume uploaded through the form."""
+        if uploaded_file is None or uploaded_file.filename == "":
+            raise ValueError("Please upload a resume file.")
+
+        extension = os.path.splitext(uploaded_file.filename)[1].lower()
+        if extension not in ALLOWED_EXTENSIONS:
+            raise ValueError("Only PDF and TXT resumes are supported for this demo.")
+
+        file_bytes = uploaded_file.read()
+        if not file_bytes:
+            raise ValueError("The uploaded resume is empty.")
+
+        if extension == ".pdf":
+            reader = PdfReader(io.BytesIO(file_bytes))
+            extracted = " ".join((page.extract_text() or "") for page in reader.pages).strip()
+        else:
+            extracted = file_bytes.decode("utf-8", errors="ignore").strip()
+
+        if not extracted:
+            raise ValueError("No readable text was found in the uploaded resume.")
+
+        return extracted, uploaded_file.filename
+
+    def analyze_resume_text(text: str, source_name: str = "Typed Resume Text") -> dict:
+        """Perform a fast keyword-based resume analysis suitable for live demos."""
+        normalized = " ".join(text.split())
+        lowered = normalized.lower()
+        word_count = len(normalized.split())
+        matched_skills = [skill.title() for skill in SKILL_KEYWORDS if skill in lowered]
+
+        score = 35
+        if word_count >= 120:
+            score += 20
+        elif word_count >= 60:
+            score += 12
+
+        score += min(len(matched_skills) * 8, 40)
+        if any(keyword in lowered for keyword in ["project", "experience", "internship", "certification"]):
+            score += 5
+        score = min(score, 100)
+
+        suggestions = []
+        if word_count < 80:
+            suggestions.append("Add more detail about projects, internships, and measurable impact.")
+        if len(matched_skills) < 4:
+            suggestions.append("Include more role-relevant technical skills and tools in the resume.")
+        if "github" not in lowered and "portfolio" not in lowered:
+            suggestions.append("Add a GitHub or portfolio link to make your profile stronger.")
+        if not suggestions:
+            suggestions = [
+                "Tailor the summary and skills section for the exact job role.",
+                "Keep achievement bullets result-focused with numbers where possible.",
+                "Review formatting for consistent headings and concise bullet points.",
+            ]
+
+        preview = normalized[:350] + ("..." if len(normalized) > 350 else "")
+        return {
+            "source_name": source_name,
+            "word_count": word_count,
+            "skills_found": matched_skills,
+            "score": score,
+            "suggestions": suggestions[:3],
+            "preview": preview,
+        }
+
+    def render_home(result: dict | None = None, error_message: str | None = None, resume_text: str = "") -> str:
+        """Render the main AI Resume Analyzer UI."""
+        metadata = deployment_metadata()
         html = """
         <!DOCTYPE html>
         <html lang="en">
         <head>
             <meta charset="UTF-8">
             <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>{{ project_title }}</title>
+            <title>{{ metadata.project }}</title>
             <style>
                 :root {
-                    --bg: #eef3f8;
-                    --bg-accent: #dfe8f2;
-                    --navy: #11324d;
-                    --slate: #4a647e;
-                    --card: rgba(255, 255, 255, 0.92);
-                    --line: rgba(17, 50, 77, 0.12);
-                    --text-main: #182635;
-                    --text-muted: #5c7289;
-                    --success: #1d7f5f;
+                    --bg: #edf4fb;
+                    --bg-accent: #dce8f3;
+                    --navy: #14324b;
                     --teal: #1f6f8b;
-                    --gold: #b8860b;
+                    --green: #1d7f5f;
+                    --gold: #ae7c14;
+                    --card: rgba(255, 255, 255, 0.94);
+                    --line: rgba(20, 50, 75, 0.12);
+                    --text: #162737;
+                    --muted: #5b7287;
+                    --danger-bg: #fff1ef;
+                    --danger-text: #9e3d31;
                 }
                 body {
-                    font-family: Georgia, "Times New Roman", serif;
-                    background:
-                        radial-gradient(circle at top left, rgba(31, 111, 139, 0.14), transparent 24%),
-                        linear-gradient(180deg, var(--bg), var(--bg-accent));
                     margin: 0;
-                    color: var(--text-main);
+                    font-family: "Segoe UI", Arial, sans-serif;
+                    color: var(--text);
+                    background:
+                        radial-gradient(circle at top left, rgba(31, 111, 139, 0.14), transparent 25%),
+                        linear-gradient(180deg, var(--bg), var(--bg-accent));
                 }
                 .page {
                     max-width: 1180px;
                     margin: 0 auto;
-                    padding: 28px 20px 48px;
+                    padding: 28px 18px 40px;
                 }
                 .topbar {
                     display: flex;
                     justify-content: space-between;
-                    align-items: center;
                     gap: 12px;
-                    margin-bottom: 18px;
                     padding: 14px 18px;
                     border-radius: 18px;
-                    background: rgba(255, 255, 255, 0.75);
+                    background: rgba(255, 255, 255, 0.78);
                     border: 1px solid var(--line);
-                }
-                .topbar-title {
+                    margin-bottom: 18px;
                     font-size: 0.95rem;
+                }
+                .topbar strong {
                     color: var(--navy);
-                    letter-spacing: 0.08em;
                     text-transform: uppercase;
-                    font-weight: 700;
-                    font-family: "Segoe UI", Arial, sans-serif;
-                }
-                .topbar-meta {
-                    color: var(--text-muted);
-                    font-size: 0.95rem;
-                    font-family: "Segoe UI", Arial, sans-serif;
+                    letter-spacing: 0.06em;
+                    font-size: 0.84rem;
                 }
                 .hero {
                     display: grid;
-                    grid-template-columns: 1.4fr 1fr;
-                    gap: 24px;
-                    align-items: stretch;
-                    margin-bottom: 24px;
+                    grid-template-columns: 1.15fr 0.85fr;
+                    gap: 22px;
+                    margin-bottom: 22px;
                 }
                 .panel {
                     background: var(--card);
-                    border: 1px solid var(--line);
                     border-radius: 24px;
-                    box-shadow: 0 18px 40px rgba(17, 50, 77, 0.08);
+                    border: 1px solid var(--line);
+                    box-shadow: 0 18px 40px rgba(20, 50, 75, 0.08);
                 }
                 .hero-copy {
-                    padding: 34px;
+                    padding: 30px;
                 }
                 .eyebrow {
                     display: inline-block;
                     padding: 8px 14px;
                     border-radius: 999px;
-                    background: rgba(17, 50, 77, 0.08);
+                    background: rgba(20, 50, 75, 0.08);
                     color: var(--navy);
-                    font-weight: bold;
-                    letter-spacing: 0.05em;
-                    text-transform: uppercase;
                     font-size: 0.78rem;
-                    font-family: "Segoe UI", Arial, sans-serif;
+                    text-transform: uppercase;
+                    letter-spacing: 0.05em;
+                    font-weight: 700;
                 }
                 h1 {
-                    font-size: clamp(2.2rem, 4vw, 4rem);
-                    line-height: 1.05;
-                    margin: 18px 0 14px;
+                    font-family: Georgia, "Times New Roman", serif;
                     color: var(--navy);
+                    margin: 18px 0 12px;
+                    font-size: clamp(2.1rem, 4vw, 3.5rem);
+                    line-height: 1.05;
                 }
                 .lead {
-                    color: var(--text-muted);
-                    font-size: 1.08rem;
-                    line-height: 1.7;
-                    max-width: 58ch;
-                    font-family: "Segoe UI", Arial, sans-serif;
+                    color: var(--muted);
+                    line-height: 1.75;
+                    max-width: 62ch;
+                    margin-bottom: 20px;
                 }
-                .status-grid {
+                .stats {
                     display: grid;
                     grid-template-columns: repeat(2, minmax(0, 1fr));
                     gap: 14px;
-                    margin-top: 28px;
                 }
                 .stat {
-                    padding: 18px;
-                    border-radius: 18px;
-                    background: rgba(255, 255, 255, 0.85);
+                    background: rgba(255, 255, 255, 0.9);
                     border: 1px solid var(--line);
+                    border-radius: 18px;
+                    padding: 16px;
                 }
                 .stat-label {
-                    color: var(--text-muted);
-                    font-size: 0.82rem;
+                    color: var(--muted);
+                    font-size: 0.8rem;
                     text-transform: uppercase;
                     letter-spacing: 0.05em;
                     margin-bottom: 10px;
-                    font-family: "Segoe UI", Arial, sans-serif;
                 }
                 .stat-value {
-                    font-size: 1.15rem;
-                    font-weight: 700;
                     color: var(--navy);
-                    font-family: "Segoe UI", Arial, sans-serif;
+                    font-weight: 700;
+                    font-size: 1.05rem;
                 }
                 .hero-side {
                     padding: 24px;
-                    display: flex;
-                    flex-direction: column;
-                    justify-content: space-between;
                 }
-                .health {
-                    padding: 16px 18px;
-                    border-radius: 18px;
-                    background: rgba(29, 127, 95, 0.08);
-                    border: 1px solid rgba(29, 127, 95, 0.18);
-                    color: var(--text-main);
-                    margin-bottom: 18px;
-                    font-family: "Segoe UI", Arial, sans-serif;
-                }
-                .health strong {
-                    color: var(--success);
-                }
-                .pipeline-title {
-                    margin: 0 0 16px;
-                    font-size: 1.1rem;
+                .flow-title {
+                    margin: 0 0 12px;
                     color: var(--navy);
+                    font-size: 1.15rem;
                 }
-                .pipeline-step {
+                .flow-step {
                     display: flex;
-                    align-items: center;
                     gap: 12px;
+                    align-items: center;
                     padding: 12px 0;
-                    color: var(--text-muted);
                     border-top: 1px solid var(--line);
-                    font-family: "Segoe UI", Arial, sans-serif;
+                    color: var(--muted);
                 }
-                .pipeline-step:first-of-type {
+                .flow-step:first-of-type {
                     border-top: none;
                 }
                 .step-dot {
@@ -261,66 +331,138 @@ def create_app() -> Flask:
                     display: flex;
                     align-items: center;
                     justify-content: center;
-                    background: rgba(17, 50, 77, 0.1);
+                    background: rgba(31, 111, 139, 0.12);
                     color: var(--teal);
                     font-weight: 700;
                     flex-shrink: 0;
                 }
-                .section-grid {
+                .workspace {
                     display: grid;
-                    grid-template-columns: repeat(3, minmax(0, 1fr));
-                    gap: 18px;
+                    grid-template-columns: 0.95fr 1.05fr;
+                    gap: 22px;
                 }
-                .info-card {
-                    padding: 24px;
+                .form-panel, .result-panel {
+                    padding: 26px;
                 }
-                .info-card h2 {
+                h2 {
+                    color: var(--navy);
                     margin-top: 0;
-                    margin-bottom: 12px;
-                    font-size: 1.2rem;
+                }
+                label {
+                    display: block;
+                    font-weight: 600;
+                    margin: 16px 0 8px;
                     color: var(--navy);
                 }
-                .info-card p, .info-card li {
-                    color: var(--text-muted);
-                    line-height: 1.65;
-                    font-family: "Segoe UI", Arial, sans-serif;
+                input[type="file"], textarea {
+                    width: 100%;
+                    box-sizing: border-box;
+                    border: 1px solid var(--line);
+                    border-radius: 16px;
+                    padding: 14px;
+                    font: inherit;
+                    background: #fbfdff;
                 }
-                .info-card li + li {
-                    margin-top: 8px;
+                textarea {
+                    min-height: 180px;
+                    resize: vertical;
                 }
-                ul {
-                    padding-left: 18px;
-                    margin: 0;
+                .button-row {
+                    display: flex;
+                    gap: 12px;
+                    flex-wrap: wrap;
+                    margin-top: 18px;
                 }
-                .demo-banner {
-                    margin-top: 22px;
-                    padding: 18px 20px;
-                    border-radius: 18px;
-                    background: rgba(184, 134, 11, 0.08);
-                    border: 1px solid rgba(184, 134, 11, 0.2);
-                    color: var(--text-main);
-                    font-family: "Segoe UI", Arial, sans-serif;
+                button {
+                    border: none;
+                    border-radius: 999px;
+                    padding: 12px 18px;
+                    font: inherit;
+                    font-weight: 700;
+                    cursor: pointer;
                 }
-                .demo-banner strong {
-                    color: var(--gold);
+                .primary {
+                    background: var(--navy);
+                    color: white;
                 }
-                .footer-note {
+                .secondary {
+                    background: rgba(31, 111, 139, 0.12);
+                    color: var(--teal);
+                }
+                .error {
                     margin-top: 16px;
-                    color: var(--text-muted);
-                    font-size: 0.95rem;
-                    font-family: "Segoe UI", Arial, sans-serif;
+                    padding: 14px 16px;
+                    border-radius: 14px;
+                    background: var(--danger-bg);
+                    color: var(--danger-text);
+                    border: 1px solid rgba(158, 61, 49, 0.18);
                 }
-                @media (max-width: 900px) {
-                    .hero, .section-grid {
+                .result-empty {
+                    color: var(--muted);
+                    line-height: 1.7;
+                }
+                .score-card {
+                    display: inline-flex;
+                    align-items: center;
+                    gap: 10px;
+                    margin-bottom: 14px;
+                    padding: 12px 16px;
+                    border-radius: 16px;
+                    background: rgba(29, 127, 95, 0.1);
+                    border: 1px solid rgba(29, 127, 95, 0.18);
+                    color: var(--green);
+                    font-weight: 700;
+                }
+                .result-grid {
+                    display: grid;
+                    grid-template-columns: repeat(2, minmax(0, 1fr));
+                    gap: 12px;
+                    margin-bottom: 16px;
+                }
+                .result-box {
+                    border: 1px solid var(--line);
+                    border-radius: 16px;
+                    padding: 14px;
+                    background: rgba(255, 255, 255, 0.84);
+                }
+                .result-box strong {
+                    display: block;
+                    color: var(--navy);
+                    margin-bottom: 8px;
+                }
+                .skills {
+                    display: flex;
+                    flex-wrap: wrap;
+                    gap: 8px;
+                }
+                .skill {
+                    padding: 8px 10px;
+                    border-radius: 999px;
+                    background: rgba(31, 111, 139, 0.1);
+                    color: var(--teal);
+                    font-size: 0.92rem;
+                    font-weight: 600;
+                }
+                .suggestions {
+                    margin: 0;
+                    padding-left: 20px;
+                    color: var(--muted);
+                    line-height: 1.65;
+                }
+                .preview {
+                    margin-top: 16px;
+                    padding: 14px;
+                    border-radius: 16px;
+                    background: #0f2235;
+                    color: #e4f5ff;
+                    white-space: pre-wrap;
+                    line-height: 1.55;
+                }
+                @media (max-width: 960px) {
+                    .hero, .workspace {
                         grid-template-columns: 1fr;
                     }
-                    .page {
-                        padding: 18px 14px 32px;
-                    }
-                    .hero-copy, .hero-side, .info-card {
-                        padding: 20px;
-                    }
-                    .status-grid {
+                    .stats, .result-grid {
                         grid-template-columns: 1fr;
                     }
                 }
@@ -329,115 +471,164 @@ def create_app() -> Flask:
         <body>
             <div class="page">
                 <div class="topbar">
-                    <div class="topbar-title">Department Project Demonstration</div>
-                    <div class="topbar-meta">Build Reference: {{ build_ref }} | Deployed At: {{ deployed_at }}</div>
+                    <div><strong>AI Resume Analyzer with Automated CI/CD Pipeline</strong></div>
+                    <div>Version: {{ metadata.version }} | Build: {{ metadata.build_ref }} | Deployed: {{ metadata.deployed_at }}</div>
                 </div>
 
                 <section class="hero">
                     <div class="panel hero-copy">
-                        <span class="eyebrow">{{ project_title }}</span>
-                        <h1>App Running</h1>
+                        <span class="eyebrow">Fast 2-Minute Viva Demo</span>
+                        <h1>Upload a Resume and Get Instant Analysis</h1>
                         <p class="lead">
-                            This project demonstrates a complete DevOps workflow using Flask, Docker,
-                            GitHub Actions, Docker Hub, and Render. Every push can run tests, build a
-                            container image, and trigger a live cloud deployment.
+                            This project combines a lightweight AI-style resume analyzer with a complete DevOps pipeline.
+                            Users upload a PDF or text resume, receive instant keyword-based analysis, and every GitHub
+                            push still goes through testing, security audit, Docker build, Docker Hub push, and live Render deployment.
                         </p>
-
-                        <div class="status-grid">
+                        <div class="stats">
                             <div class="stat">
-                                <div class="stat-label">Version</div>
-                                <div class="stat-value">{{ version }}</div>
+                                <div class="stat-label">Upload Support</div>
+                                <div class="stat-value">PDF and TXT resumes</div>
                             </div>
                             <div class="stat">
-                                <div class="stat-label">Application Status</div>
-                                <div class="stat-value">Healthy and Reachable</div>
+                                <div class="stat-label">Analysis Speed</div>
+                                <div class="stat-value">1 to 2 seconds</div>
                             </div>
                             <div class="stat">
-                                <div class="stat-label">Tech Stack</div>
-                                <div class="stat-value">Flask + Docker + GitHub Actions</div>
+                                <div class="stat-label">Scoring Method</div>
+                                <div class="stat-value">Word count + skills + sections</div>
                             </div>
                             <div class="stat">
-                                <div class="stat-label">Deployment Target</div>
-                                <div class="stat-value">Render Public Web Service</div>
-                            </div>
-                            <div class="stat">
-                                <div class="stat-label">Security Gate</div>
-                                <div class="stat-value">Dependency Audit Before Release</div>
-                            </div>
-                            <div class="stat">
-                                <div class="stat-label">Build Reference</div>
-                                <div class="stat-value">{{ build_ref }}</div>
+                                <div class="stat-label">Deployment</div>
+                                <div class="stat-value">Docker + GitHub Actions + Render</div>
                             </div>
                         </div>
                     </div>
 
                     <div class="panel hero-side">
-                        <div class="health">
-                            <strong>Live Status:</strong> The application container is up and serving requests.
-                        </div>
-                        <div>
-                            <h2 class="pipeline-title">Pipeline Flow</h2>
-                            <div class="pipeline-step"><span class="step-dot">1</span> Push code to GitHub</div>
-                            <div class="pipeline-step"><span class="step-dot">2</span> Run automated tests from AutoTesting</div>
-                            <div class="pipeline-step"><span class="step-dot">3</span> Build Docker image</div>
-                            <div class="pipeline-step"><span class="step-dot">4</span> Push image to Docker Hub</div>
-                            <div class="pipeline-step"><span class="step-dot">5</span> Trigger Render deployment</div>
-                            <div class="pipeline-step"><span class="step-dot">6</span> Access updated app on public URL</div>
-                        </div>
+                        <h2 class="flow-title">CI/CD Flow</h2>
+                        <div class="flow-step"><span class="step-dot">1</span> Push code to GitHub</div>
+                        <div class="flow-step"><span class="step-dot">2</span> Run pytest checks</div>
+                        <div class="flow-step"><span class="step-dot">3</span> Run pip-audit security scan</div>
+                        <div class="flow-step"><span class="step-dot">4</span> Build Docker image</div>
+                        <div class="flow-step"><span class="step-dot">5</span> Push image to Docker Hub</div>
+                        <div class="flow-step"><span class="step-dot">6</span> Trigger Render deployment</div>
                     </div>
                 </section>
 
-                <section class="section-grid">
-                    <article class="panel info-card">
-                        <h2>Project Purpose</h2>
-                        <p>
-                            The goal of this project is to show a real end-to-end CI/CD pipeline
-                            rather than complex business logic. It is designed for student demos,
-                            viva sessions, portfolio projects, and beginner DevOps practice with
-                            a strong focus on automation and deployment confidence.
-                        </p>
-                    </article>
+                <section class="workspace">
+                    <div class="panel form-panel">
+                        <h2>Resume Input</h2>
+                        <form action="/upload" method="post" enctype="multipart/form-data">
+                            <label for="resume_file">Upload PDF or TXT resume</label>
+                            <input id="resume_file" name="resume_file" type="file" accept=".pdf,.txt">
+                            <div class="button-row">
+                                <button class="primary" type="submit">Upload and Analyze</button>
+                            </div>
+                        </form>
 
-                    <article class="panel info-card">
-                        <h2>Academic Talking Points</h2>
-                        <ul>
-                            <li>Continuous Integration validates every code push with automated tests.</li>
-                            <li>Containerization ensures the same build runs locally and in the cloud.</li>
-                            <li>Continuous Deployment reduces manual release steps and human error.</li>
-                            <li>Security auditing blocks unsafe dependency changes before release.</li>
-                            <li>Health checks help the platform verify service availability.</li>
-                        </ul>
-                    </article>
+                        <form action="/analyze" method="post">
+                            <label for="resume_text">Or paste resume text directly</label>
+                            <textarea id="resume_text" name="resume_text" placeholder="Paste resume content here...">{{ resume_text }}</textarea>
+                            <div class="button-row">
+                                <button class="secondary" type="submit">Analyze Text</button>
+                            </div>
+                        </form>
 
-                    <article class="panel info-card">
-                        <h2>Submission Summary</h2>
-                        <p>
-                            This is a complete student-friendly DevOps project that combines source
-                            control, automated testing, security checks, Docker image creation,
-                            cloud deployment, and public accessibility in one workflow.
-                        </p>
-                    </article>
+                        {% if error_message %}
+                        <div class="error">{{ error_message }}</div>
+                        {% endif %}
+                    </div>
+
+                    <div class="panel result-panel">
+                        <h2>Analysis Result</h2>
+                        {% if result %}
+                            <div class="score-card">Resume Score: {{ result.score }}/100</div>
+                            <div class="result-grid">
+                                <div class="result-box">
+                                    <strong>Resume Source</strong>
+                                    <span>{{ result.source_name }}</span>
+                                </div>
+                                <div class="result-box">
+                                    <strong>Word Count</strong>
+                                    <span>{{ result.word_count }} words</span>
+                                </div>
+                            </div>
+                            <div class="result-box">
+                                <strong>Skills Detected</strong>
+                                <div class="skills">
+                                    {% for skill in result.skills_found %}
+                                        <span class="skill">{{ skill }}</span>
+                                    {% endfor %}
+                                    {% if not result.skills_found %}
+                                        <span class="skill">No major keywords detected</span>
+                                    {% endif %}
+                                </div>
+                            </div>
+                            <div class="result-box" style="margin-top: 14px;">
+                                <strong>Suggestions</strong>
+                                <ol class="suggestions">
+                                    {% for suggestion in result.suggestions %}
+                                        <li>{{ suggestion }}</li>
+                                    {% endfor %}
+                                </ol>
+                            </div>
+                            <div class="preview">{{ result.preview }}</div>
+                        {% else %}
+                            <p class="result-empty">
+                                Upload a resume or paste text to see the analysis here. This keeps the demo simple:
+                                one upload, instant result, and clear talking points for viva.
+                            </p>
+                        {% endif %}
+                    </div>
                 </section>
-
-                <div class="demo-banner">
-                    <strong>Live Demo Tip:</strong> Change the version number, push the code, show the GitHub Actions run,
-                    and refresh the deployed URL to demonstrate automatic updates after deployment.
-                </div>
-
-                <div class="footer-note">
-                    Suggested faculty demo order: homepage, tests, workflow, Dockerfile, Render config, and then the live cloud URL.
-                </div>
             </div>
         </body>
         </html>
         """
         return render_template_string(
             html,
-            version=version,
-            project_title=project_title,
-            build_ref=build_ref,
-            deployed_at=deployed_at,
+            metadata=metadata,
+            result=result,
+            error_message=error_message,
+            resume_text=resume_text,
         )
+
+    @app.get("/")
+    def home():
+        return render_home()
+
+    @app.post("/upload")
+    def upload():
+        """Accept a resume file, extract text, and return analysis."""
+        try:
+            extracted_text, filename = extract_resume_text(request.files.get("resume_file"))
+            result = analyze_resume_text(extracted_text, source_name=filename)
+        except ValueError as exc:
+            if wants_raw_json():
+                return jsonify({"error": str(exc)}), 400
+            return render_home(error_message=str(exc)), 400
+
+        if wants_raw_json():
+            return jsonify(result), 200
+        return render_home(result=result)
+
+    @app.post("/analyze")
+    def analyze():
+        """Analyze resume text provided directly through the UI or API."""
+        resume_text = (request.form.get("resume_text") or "").strip()
+        if not resume_text and request.is_json:
+            resume_text = (request.get_json(silent=True) or {}).get("resume_text", "").strip()
+
+        if not resume_text:
+            error_message = "Please paste resume text before starting analysis."
+            if wants_raw_json():
+                return jsonify({"error": error_message}), 400
+            return render_home(error_message=error_message), 400
+
+        result = analyze_resume_text(resume_text)
+        if wants_raw_json():
+            return jsonify(result), 200
+        return render_home(result=result, resume_text=resume_text)
 
     @app.get("/health")
     def health():
@@ -451,14 +642,8 @@ def create_app() -> Flask:
     def info():
         """Project metadata endpoint useful for demos and operational checks."""
         payload = {
-            "project": "Full CI/CD Pipeline with Docker and Live Cloud Deployment",
+            **deployment_metadata(),
             "status": "running",
-            "version": os.getenv("APP_VERSION", "1.0.0"),
-            "build_ref": (os.getenv("BUILD_REF") or os.getenv("RENDER_GIT_COMMIT") or "local-demo")[
-                :12
-            ],
-            "deployed_at": os.getenv("DEPLOYED_AT")
-            or ("render-runtime" if os.getenv("RENDER") == "true" else "not-set"),
         }
         if wants_raw_json():
             return jsonify(payload), 200
